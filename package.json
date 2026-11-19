@@ -1,0 +1,11 @@
+{
+  "name": "fe-groth16",
+  "private": true,
+  "description": "Tooling to build the test circuits and proofs, and to convert snarkjs keys into Fe.",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "circom2": "0.2.23",
+    "circomlib": "2.0.5",
+    "snarkjs": "0.7.6"
+  }
+}

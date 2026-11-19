@@ -1,0 +1,87 @@
+// PreimageBounty tests. Bob's and Alice's proofs are for the same secret,
+// made for recipients 0xb0b and 0xa11ce.
+
+use ingot::{Proof, R}
+use ingot::bounty::{BountyMsg, PreimageBounty}
+use ingot::vectors::{ALICE, BOB, BOB_INPUTS}
+use std::evm::ether
+
+const BOB_ADDR: u256 = 0xb0b
+const ALICE_ADDR: u256 = 0xa11ce
+
+fn deploy() -> Address uses (evm: mut Evm) {
+    evm.create2<PreimageBounty>(value: ether(1), args: (BOB_INPUTS[0],), salt: 0)
+}
+
+fn claim(_ bounty: Address, proof: Proof, recipient: u256) -> bool
+uses (evm: mut Evm)
+{
+    evm.try_call(
+        addr: bounty,
+        gas: 1000000,
+        value: Wei::zero(),
+        message: BountyMsg::Claim {
+            a: [proof.a.x, proof.a.y],
+            b: [[proof.b.x_im, proof.b.x_re], [proof.b.y_im, proof.b.y_re]],
+            c: [proof.c.x, proof.c.y],
+            recipient: Address::new(recipient),
+        },
+    )
+        .success()
+}
+
+fn is_claimed(_ bounty: Address) -> bool uses (evm: mut Evm) {
+    evm.call(
+        addr: bounty,
+        gas: 100000,
+        value: Wei::zero(),
+        message: BountyMsg::Claimed {},
+    )
+}
+
+#[test(balance = 10_000_000_000_000_000_000)]
+fn valid_claim_pays_the_recipient() uses (evm: mut Evm) {
+    let bounty = deploy()
+    let hash: u256 = evm
+        .call(
+            addr: bounty,
+            gas: 100000,
+            value: Wei::zero(),
+            message: BountyMsg::Hash {},
+        )
+    assert!(hash == BOB_INPUTS[0])
+    assert!(!is_claimed(bounty))
+
+    assert!(claim(bounty, proof: BOB, recipient: BOB_ADDR))
+    assert!(evm.balance(Address::new(BOB_ADDR)) == ether(1))
+    assert!(evm.balance(bounty) == Wei::zero())
+    assert!(is_claimed(bounty))
+}
+
+// Someone who copies Bob's pending claim and swaps in their own address gets
+// nothing: the proof only verifies for 0xb0b.
+#[test(balance = 10_000_000_000_000_000_000)]
+fn copied_proof_cannot_redirect_payout() uses (evm: mut Evm) {
+    let bounty = deploy()
+    assert!(!claim(bounty, proof: BOB, recipient: ALICE_ADDR))
+    assert!(evm.balance(bounty) == ether(1))
+    assert!(!is_claimed(bounty))
+
+    // Bob's own claim still goes through afterwards.
+    assert!(claim(bounty, proof: BOB, recipient: BOB_ADDR))
+}
+
+#[test(balance = 10_000_000_000_000_000_000)]
+fn bounty_pays_once() uses (evm: mut Evm) {
+    let bounty = deploy()
+    assert!(claim(bounty, proof: ALICE, recipient: ALICE_ADDR))
+    assert!(!claim(bounty, proof: BOB, recipient: BOB_ADDR))
+    assert!(!claim(bounty, proof: ALICE, recipient: ALICE_ADDR))
+    assert!(evm.balance(Address::new(ALICE_ADDR)) == ether(1))
+    assert!(evm.balance(Address::new(BOB_ADDR)) == Wei::zero())
+}
+
+#[test(should_revert, balance = 10_000_000_000_000_000_000)]
+fn hash_outside_field_is_refused() uses (evm: mut Evm) {
+    let _ = evm.create2<PreimageBounty>(value: ether(1), args: (R,), salt: 0)
+}

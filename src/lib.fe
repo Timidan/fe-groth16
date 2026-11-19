@@ -1,82 +1,164 @@
-// A time-locked vault: each account deposits ETH and can withdraw it once its
-// lock period has passed. Replace it with your own project.
+//! Groth16 proof verification on BN254 (alt_bn128), the curve snarkjs and
+//! circom use and the EVM supports through precompiles 0x06, 0x07 and 0x08.
+//!
+//! The number of public inputs `N` is a const generic shared by the key and
+//! the inputs, so passing inputs of the wrong length to a key does not
+//! compile. `verify` declares no effects: it cannot read or write storage,
+//! emit logs, send value or call contracts other than the precompiles.
 
-use std::evm::StorageMap
+use core::marker::Copy
+use core::num::{addmod, mulmod}
+use core::ptr::MemBuffer
+use std::evm::crypto::{ec_add, ec_mul, ec_pairing}
 
-msg VaultMsg {
-    #[selector = sol("deposit()")]
-    Deposit -> Timestamp,
-    #[selector = sol("withdraw(address)")]
-    Withdraw { to: Address } -> Wei,
-    #[selector = sol("balanceOf(address)")]
-    BalanceOf { owner: Address } -> Wei,
-    #[selector = sol("unlockTime(address)")]
-    UnlockTime { owner: Address } -> Timestamp,
-}
+/// Order of the BN254 scalar field. Every public input must be below it.
+pub const R: u256 = 21888242871839275222246405745257275088548364400416034343698204186575808495617
 
-#[event]
-struct Deposited {
-    #[indexed]
-    owner: Address,
-    amount: Wei,
-    unlock_at: Timestamp,
-}
+/// Order of the BN254 base field. Every point coordinate must be below it.
+pub const Q: u256 = 21888242871839275222246405745257275088696311157297823662689037894645226208583
 
-#[event]
-struct Withdrawn {
-    #[indexed]
-    owner: Address,
-    to: Address,
-    amount: Wei,
-}
+/// An affine point on G1. `(0, 0)` is the point at infinity, as for the
+/// precompiles.
+pub struct G1 { pub x: u256, pub y: u256 }
 
-pub contract Vault uses (ctx: Ctx, call: mut Call, log: mut Log) {
-    lock: Duration,
-    mut balances: StorageMap<Address, Wei>,
-    mut unlock_at: StorageMap<Address, Timestamp>,
+/// An affine point on G2. Each coordinate is an element of F_q^2 written
+/// imaginary part first, the order of the pairing precompile and of snarkjs
+/// calldata.
+pub struct G2 { pub x_im: u256, pub x_re: u256, pub y_im: u256, pub y_re: u256 }
 
-    init(lock_period: Duration) uses (mut lock) { lock = lock_period }
+impl Copy for G1 {}
+impl Copy for G2 {}
 
-    recv VaultMsg {
-        // Every deposit restarts the depositor's lock period.
-        #[payable]
-        Deposit -> Timestamp uses (ctx, lock, mut balances, mut unlock_at, mut log) {
-            let owner = ctx.caller()
-            let amount = ctx.value()
-            assert!(amount > Wei::zero(), "Nothing to deposit")
+/// A Groth16 proof `(A, B, C)`.
+pub struct Proof { pub a: G1, pub b: G2, pub c: G1 }
 
-            let unlock = ctx.timestamp() + lock
-            balances.set(key: owner, value: balances.get(key: owner) + amount)
-            unlock_at.set(key: owner, value: unlock)
-            log.emit(Deposited { owner, amount, unlock_at: unlock })
-            unlock
-        }
-
-        Withdraw { to } -> Wei uses (ctx, mut call, mut balances, unlock_at, mut log) {
-            let owner = ctx.caller()
-            let amount = balances.get(key: owner)
-            assert!(amount > Wei::zero(), "Nothing to withdraw")
-            assert!(
-                ctx.timestamp() >= unlock_at.get(key: owner),
-                "Still locked",
-            )
-
-            // Update the balance before sending, so a reentrant call finds nothing.
-            balances.set(key: owner, value: Wei::zero())
-            assert!(
-                call.send_value(addr: to, gas: 0, value: amount).success(),
-                "Transfer failed",
-            )
-            log.emit(Withdrawn { owner, to, amount })
-            amount
-        }
-
-        BalanceOf { owner } -> Wei uses (balances) {
-            balances.get(key: owner)
-        }
-
-        UnlockTime { owner } -> Timestamp uses (unlock_at) {
-            unlock_at.get(key: owner)
+impl Proof {
+    /// The proof from the `a`, `b` and `c` arguments of snarkjs's Solidity
+    /// `verifyProof`. `snarkjs zkey export soliditycalldata` already writes
+    /// `b` in precompile order.
+    pub fn from_calldata(a: [u256; 2], b: [[u256; 2]; 2], c: [u256; 2]) -> Self {
+        Proof {
+            a: G1 { x: a[0], y: a[1] },
+            b: G2 { x_im: b[0][0], x_re: b[0][1], y_im: b[1][0], y_re: b[1][1] },
+            c: G1 { x: c[0], y: c[1] },
         }
     }
+}
+
+/// A Groth16 verifying key for a circuit with `N` public inputs.
+pub struct VerifyingKey<const N: usize> {
+    pub alpha: G1,
+    pub beta: G2,
+    pub gamma: G2,
+    pub delta: G2,
+    /// `IC[0]`, the constant term of the input commitment.
+    pub ic0: G1,
+    /// `IC[1..=N]`, one point per public input.
+    pub ic: [G1; N],
+}
+
+/// Why `verify` rejected a proof.
+pub enum Rejection {
+    /// A public input is `R` or more. Accepting it would give every input a
+    /// second encoding, `x + R`, under which the same proof verifies.
+    InputNotInField,
+    /// A proof coordinate is `Q` or more.
+    CoordinateNotInField,
+    /// `A` or `C` is not on the curve `y^2 = x^3 + 3`.
+    NotOnCurve,
+    /// The key's input commitment could not be computed: the key is malformed.
+    InvalidKey,
+    /// The pairing precompile rejected the input: `B` is not on the twist or
+    /// not in the subgroup. The failed call consumes the gas it was given.
+    InvalidG2,
+    /// The points are valid, but the pairing equation does not hold.
+    PairingMismatch,
+}
+
+/// Checks `proof` against `vk` and the public `inputs`, in the order snarkjs
+/// writes them to `public.json`.
+///
+/// Accepts exactly the proofs snarkjs's Solidity verifier accepts, and
+/// rejects a few malformed ones earlier, with a reason and without spending
+/// the gas a failed precompile call would.
+pub fn verify<const N: usize>(vk: VerifyingKey<N>, proof: Proof, inputs: [u256; N]) -> Result<
+    Rejection,
+    (),
+> {
+    var i: usize = 0
+    while i < N {
+        if inputs[i] >= R {
+            return Result::Err(Rejection::InputNotInField)
+        }
+        i = i + 1
+    }
+    if !g1_in_field(proof.a) || !g1_in_field(proof.c) || !g2_in_field(proof.b) {
+        return Result::Err(Rejection::CoordinateNotInField)
+    }
+    if !on_curve(proof.a) || !on_curve(proof.c) {
+        return Result::Err(Rejection::NotOnCurve)
+    }
+
+    // vk_x = IC[0] + sum(inputs[i] * IC[i + 1])
+    var vk_x = vk.ic0
+    var j: usize = 0
+    while j < N {
+        let term = match ec_mul(px: vk.ic[j].x, py: vk.ic[j].y, s: inputs[j]) {
+            Result::Ok(p) => p,
+            Result::Err(_) => {
+                return Result::Err(Rejection::InvalidKey)
+            },
+        }
+        vk_x = match ec_add(ax: vk_x.x, ay: vk_x.y, bx: term.0, by: term.1) {
+            Result::Ok(p) => G1 { x: p.0, y: p.1 },
+            Result::Err(_) => {
+                return Result::Err(Rejection::InvalidKey)
+            },
+        }
+        j = j + 1
+    }
+
+    // e(-A, B) * e(alpha, beta) * e(vk_x, gamma) * e(C, delta) == 1
+    var pairs = MemBuffer::with_capacity(768)
+    write_pair(mut pairs, at: 0, p: negate(proof.a), q: proof.b)
+    write_pair(mut pairs, at: 192, p: vk.alpha, q: vk.beta)
+    write_pair(mut pairs, at: 384, p: vk_x, q: vk.gamma)
+    write_pair(mut pairs, at: 576, p: proof.c, q: vk.delta)
+
+    match ec_pairing(pairs.span()) {
+        Result::Ok(true) => Result::Ok(()),
+        Result::Ok(false) => Result::Err(Rejection::PairingMismatch),
+        Result::Err(_) => Result::Err(Rejection::InvalidG2),
+    }
+}
+
+fn g1_in_field(_ p: G1) -> bool {
+    p.x < Q && p.y < Q
+}
+
+fn g2_in_field(_ p: G2) -> bool {
+    p.x_im < Q && p.x_re < Q && p.y_im < Q && p.y_re < Q
+}
+
+/// `y^2 == x^3 + 3 (mod Q)`, or the point at infinity. BN254's G1 has
+/// cofactor 1, so every point on the curve is in the group.
+fn on_curve(_ p: G1) -> bool {
+    if p.x == 0 && p.y == 0 {
+        return true
+    }
+    mulmod(p.y, p.y, Q) == addmod(mulmod(mulmod(p.x, p.x, Q), p.x, Q), 3, Q)
+}
+
+fn negate(_ p: G1) -> G1 {
+    if p.y == 0 { return p }
+    G1 { x: p.x, y: Q - p.y }
+}
+
+fn write_pair(_ buf: mut MemBuffer, at: usize, p: G1, q: G2) {
+    buf.write_word(offset: at, value: p.x)
+    buf.write_word(offset: at + 32, value: p.y)
+    buf.write_word(offset: at + 64, value: q.x_im)
+    buf.write_word(offset: at + 96, value: q.x_re)
+    buf.write_word(offset: at + 128, value: q.y_im)
+    buf.write_word(offset: at + 160, value: q.y_re)
 }

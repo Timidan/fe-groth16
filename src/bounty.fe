@@ -1,0 +1,70 @@
+//! A bounty for the preimage of a Poseidon hash, paid on a zero-knowledge
+//! proof. The claimant never reveals the preimage, and the proof commits to
+//! the recipient, so copying a pending claim cannot redirect the payout.
+
+use ingot::{Proof, R, verify}
+use ingot::preimage_key::PREIMAGE_VK
+
+pub msg BountyMsg {
+    /// Pays the whole balance to `recipient` for a proof of knowledge of a
+    /// preimage of `hash()`, made for `recipient`.
+    #[selector = sol("claim(uint256[2],uint256[2][2],uint256[2],address)")]
+    Claim { a: [u256; 2], b: [[u256; 2]; 2], c: [u256; 2], recipient: Address } -> Wei,
+    #[selector = sol("hash()")]
+    Hash -> u256,
+    #[selector = sol("claimed()")]
+    Claimed -> bool,
+}
+
+#[event]
+struct BountyClaimed {
+    #[indexed]
+    recipient: Address,
+    amount: Wei,
+}
+
+pub contract PreimageBounty uses (ctx: Ctx, call: mut Call, log: mut Log) {
+    hash: u256,
+    mut claimed: bool,
+
+    /// Funds the bounty for `poseidon_hash`, which must be a field element:
+    /// no proof exists for a larger value.
+    #[payable]
+    init(poseidon_hash: u256)
+    uses (mut hash)
+    {
+        assert!(poseidon_hash < R, "Hash not in field")
+        hash = poseidon_hash
+    }
+
+    recv BountyMsg {
+        // The only handler that can move funds, as its `mut call` says.
+        // `verify` declares no effects at all.
+        Claim { a, b, c, recipient } -> Wei uses (ctx, mut call, hash, mut claimed, mut log) {
+            assert!(!claimed, "Already claimed")
+            let proof = Proof::from_calldata(a, b, c)
+            assert!(
+                verify(vk: PREIMAGE_VK, proof, inputs: [hash, recipient.word()]).is_ok(),
+                "Invalid proof",
+            )
+
+            // Mark the bounty claimed before sending, so a reentrant call finds it claimed.
+            claimed = true
+            let amount = ctx.selfbalance()
+            assert!(
+                call.send_value(addr: recipient, gas: 0, value: amount).success(),
+                "Transfer failed",
+            )
+            log.emit(BountyClaimed { recipient, amount })
+            amount
+        }
+
+        Hash -> u256 uses (hash) {
+            hash
+        }
+
+        Claimed -> bool uses (claimed) {
+            claimed
+        }
+    }
+}

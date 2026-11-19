@@ -8,8 +8,7 @@ permissions:
   contents: read
 
 env:
-  # Any Fe release from 26.5.0 on is allowed for the contest.
-  FE_VERSION: v26.5.0
+  FE_VERSION: v26.6.0
 
 jobs:
   test:
@@ -24,3 +23,7 @@ jobs:
       - run: fe fmt --check
       - run: fe test
       - run: fe build
+      - name: Generated Fe sources match the committed snarkjs files
+        run: |
+          scripts/gen.sh
+          git diff --exit-code
