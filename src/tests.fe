@@ -214,6 +214,16 @@ fn invalid_g2_point_is_rejected() {
     )
 }
 
+// A key whose input point is not on the curve makes ecMul fail.
+#[test]
+fn malformed_key_is_reported() {
+    var bad = MULTIPLIER_VK
+    bad.ic = [G1 { x: 1, y: 1 }]
+    assert!(
+        outcome(verify(vk: bad, proof: MUL_1, inputs: MUL_1_INPUTS)) == INVALID_KEY,
+    )
+}
+
 // The point at infinity is a valid encoding for the precompiles, but a proof
 // made of it does not satisfy the equation.
 #[test]

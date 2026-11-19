@@ -45,3 +45,5 @@ jobs:
       - run: npm ci
       - run: fe build
       - run: node scripts/compare.mjs
+      - name: Demo from a clean checkout
+        run: scripts/demo.sh

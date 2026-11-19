@@ -86,11 +86,11 @@ refused: Already claimed
 | --- | --- | --- |
 | Valid proof | 221,411 | 225,021 (+1.6%) |
 | Wrong input, tampered `A`, `B` or `C` | 221,399 – 221,423 | 225,042 – 225,066 |
-| `A` or `C` off the curve, coordinate ≥ `q` | 985,049 – 985,060 | 31,170 – 33,000 |
+| `A` or `C` off the curve, coordinate ≥ `q` | 985,049 – 985,060 (nearly the whole limit) | 31,170 – 33,000 |
 | `B` off the twist | 985,060 | 985,181 |
 | Runtime bytecode | 1,439 bytes | 3,284 bytes |
 
-A valid proof costs about 3,600 gas more in Fe. A malformed proof costs about 30 times less: the Solidity verifier hands it to the pairing precompile, and the failed call burns the gas it was given. `verify` refuses it first.
+A valid proof costs about 3,600 gas more in Fe. For a malformed `A`, `C` or coordinate, the costs differ in kind: the Solidity verifier hands the point to the pairing precompile, and the failed call burns nearly all the gas the caller supplied, so its cost grows with the gas limit. `verify` refuses the point first, for a fixed 31,000–33,000 gas.
 
 ## Architecture
 
@@ -118,7 +118,7 @@ fe test
 fe build       # writes out/*.bin and out/*.abi.json
 ```
 
-`fe test` needs only Fe. Everything else needs Node 18 or later and `npm ci`. The demo and the comparison also need anvil and cast from [Foundry](https://getfoundry.sh):
+`fe test` needs only Fe. Everything else needs Node 18 or later and `npm ci`. The demo and the comparison also need anvil and cast from [Foundry](https://getfoundry.sh), and the demo needs `jq`:
 
 ```sh
 scripts/demo.sh                                  # the bounty, end to end on anvil
@@ -130,7 +130,7 @@ scripts/setup.sh                                 # new circuits and keys (change
 
 To verify your own circuit, export its `verification_key.json` with snarkjs (as `scripts/setup.sh` does), run `node scripts/snarkjs2fe.mjs key <name> verification_key.json > src/<name>_key.fe`, then call `verify(vk: <NAME>_VK, ...)` or deploy `<Name>Verifier`.
 
-CI runs `fe fmt --check`, `fe test` and `fe build`, regenerates the Fe sources from the committed snarkjs files and fails if they differ, and runs the comparison against the Solidity verifier.
+CI runs `fe fmt --check`, `fe test` and `fe build`, regenerates the Fe sources from the committed snarkjs files and fails if they differ, runs the comparison against the Solidity verifier, and runs the demo from a clean checkout.
 
 ## Tests
 
@@ -146,6 +146,9 @@ CI runs `fe fmt --check`, `fe test` and `fe build`, regenerates the Fe sources f
 | The generated contracts answer `verifyProof` calls like snarkjs's Solidity verifier | `generated_verifier_contracts` |
 | The bounty pays the proven recipient, once, and a copied proof can't redirect it | `valid_claim_pays_the_recipient`, `copied_proof_cannot_redirect_payout`, `bounty_pays_once` |
 | The bounty can't be created for a hash no proof can match | `hash_outside_field_is_refused` |
+| A malformed key is reported, not mistaken for a bad proof | `malformed_key_is_reported` |
+| The Fe and Solidity verifiers agree on 28 cases | `scripts/compare.mjs` (CI) |
+| The bounty works end to end with a fresh proof | `scripts/demo.sh` (CI) |
 
 ## Limitations
 

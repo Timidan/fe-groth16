@@ -4,7 +4,7 @@
 #   revealing it, Mallory copies her proof and fails to redirect the payout,
 #   a relayer submits Alice's claim, and a second claim is refused.
 #
-# Needs: fe, anvil and cast (Foundry), Node 18+, `npm ci`.
+# Needs: fe, anvil and cast (Foundry), jq, Node 18+, `npm ci`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
