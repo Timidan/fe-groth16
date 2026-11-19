@@ -78,7 +78,8 @@ pub enum Rejection {
 /// Checks `proof` against `vk` and the public `inputs`, in the order snarkjs
 /// writes them to `public.json`.
 ///
-/// Accepts exactly the proofs snarkjs's Solidity verifier accepts, and
+/// Accepts the same proofs as snarkjs's Solidity verifier (`scripts/compare.mjs`
+/// checks this in CI), and
 /// rejects a few malformed ones earlier, with a reason and without spending
 /// the gas a failed precompile call would.
 pub fn verify<const N: usize>(vk: VerifyingKey<N>, proof: Proof, inputs: [u256; N]) -> Result<

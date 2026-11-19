@@ -27,3 +27,21 @@ jobs:
         run: |
           scripts/gen.sh
           git diff --exit-code
+
+  # Runs the same proofs and malformed variants through the Fe verifiers and
+  # the Solidity verifiers snarkjs exports, and fails if any result differs.
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Fe
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/argotorg/fe/master/feup/feup.sh | bash -s -- --version "$FE_VERSION" --no-modify-path
+          echo "$HOME/.fe/bin" >> "$GITHUB_PATH"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: foundry-rs/foundry-toolchain@v1
+      - run: npm ci
+      - run: fe build
+      - run: node scripts/compare.mjs
