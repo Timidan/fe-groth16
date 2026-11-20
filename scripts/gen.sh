@@ -8,6 +8,7 @@ node scripts/snarkjs2fe.mjs key preimage vectors/preimage/verification_key.json 
 node scripts/snarkjs2fe.mjs proofs \
   MUL_1=vectors/multiplier/proof_1 \
   MUL_2=vectors/multiplier/proof_2 \
+  MUL_ZERO=vectors/multiplier/proof_zero \
   BOB=vectors/preimage/proof_bob \
   BOB_2=vectors/preimage/proof_bob_2 \
   ALICE=vectors/preimage/proof_alice \

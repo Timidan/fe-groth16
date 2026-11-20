@@ -66,11 +66,14 @@ pub enum Rejection {
     CoordinateNotInField,
     /// `A` or `C` is not on the curve `y^2 = x^3 + 3`.
     NotOnCurve,
-    /// The key's input commitment could not be computed: the key is malformed.
-    InvalidKey,
-    /// The pairing precompile rejected the input: `B` is not on the twist or
-    /// not in the subgroup. The failed call consumes the gas it was given.
-    InvalidG2,
+    /// `ecMul` or `ecAdd` failed while computing the input commitment: a key
+    /// point is not on the curve, or the call ran out of gas.
+    CommitmentCallFailed,
+    /// The pairing precompile failed: `B` or a G2 point of the key is not on
+    /// the twist or not in the subgroup, or the call ran out of gas. A failed
+    /// call consumes all the gas it was given, so a caller that pays for
+    /// others' proofs should bound the gas it forwards to verification.
+    PairingCallFailed,
     /// The points are valid, but the pairing equation does not hold.
     PairingMismatch,
 }
@@ -78,10 +81,15 @@ pub enum Rejection {
 /// Checks `proof` against `vk` and the public `inputs`, in the order snarkjs
 /// writes them to `public.json`.
 ///
-/// Accepts the same proofs as snarkjs's Solidity verifier, which
-/// `scripts/compare.mjs` checks in CI. Rejects malformed `A`, `C` and
-/// out-of-range coordinates before any precompile call, with a reason and
-/// without the gas a failed call would burn.
+/// Accepts the proofs snarkjs's Solidity verifier accepts when they are
+/// canonically encoded (every coordinate below `Q`) and given enough gas,
+/// about 3,000 more than the Solidity verifier needs. The Solidity verifier
+/// also accepts four other encodings of `A.y`, which wrap to the same point
+/// when it negates `A`; `verify` accepts one. `scripts/compare.mjs` checks
+/// both in CI.
+///
+/// Rejects malformed `A`, `C` and out-of-range coordinates before any
+/// precompile call, with a reason and without the gas a failed call burns.
 pub fn verify<const N: usize>(vk: VerifyingKey<N>, proof: Proof, inputs: [u256; N]) -> Result<
     Rejection,
     (),
@@ -107,13 +115,13 @@ pub fn verify<const N: usize>(vk: VerifyingKey<N>, proof: Proof, inputs: [u256; 
         let term = match ec_mul(px: vk.ic[j].x, py: vk.ic[j].y, s: inputs[j]) {
             Result::Ok(p) => p,
             Result::Err(_) => {
-                return Result::Err(Rejection::InvalidKey)
+                return Result::Err(Rejection::CommitmentCallFailed)
             },
         }
         vk_x = match ec_add(ax: vk_x.x, ay: vk_x.y, bx: term.0, by: term.1) {
             Result::Ok(p) => G1 { x: p.0, y: p.1 },
             Result::Err(_) => {
-                return Result::Err(Rejection::InvalidKey)
+                return Result::Err(Rejection::CommitmentCallFailed)
             },
         }
         j = j + 1
@@ -129,7 +137,7 @@ pub fn verify<const N: usize>(vk: VerifyingKey<N>, proof: Proof, inputs: [u256; 
     match ec_pairing(pairs.span()) {
         Result::Ok(true) => Result::Ok(()),
         Result::Ok(false) => Result::Err(Rejection::PairingMismatch),
-        Result::Err(_) => Result::Err(Rejection::InvalidG2),
+        Result::Err(_) => Result::Err(Rejection::PairingCallFailed),
     }
 }
 
