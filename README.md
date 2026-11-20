@@ -80,7 +80,7 @@ refused: Already claimed
 
 ## Compared with snarkjs's Solidity verifier
 
-`scripts/compare.mjs` deploys the Fe verifier and the Solidity verifier snarkjs exports for the same key to anvil. It sends both the same 14 cases per circuit: valid proofs, a wrong input, an input `x + r`, a proof from another circuit, tampered or swapped points, out-of-range coordinates, points off the curve or twist, and the all-zero proof. **Both return the same result in all 28 cases.** CI runs it on every push and fails on any difference. Gas per transaction (`gasUsed` with a 1,000,000 limit; [full table](docs/compare.md)):
+`scripts/compare.mjs` deploys the Fe verifier and the Solidity verifier snarkjs exports for the same key to anvil. It sends both the same 14 cases per circuit: valid proofs, a wrong input, an input `x + r`, a proof from another circuit, tampered or swapped points, out-of-range coordinates, points off the curve or twist, and the all-zero proof. **Both return the same result in all 28 cases.** It then fuzzes both with 500 seeded single-word mutations of a valid proof and its inputs (random words, bit flips, `+ q`, `+ r`, `- 1`, zero), and both reject every one. CI runs it on every push and fails on any difference. Gas per transaction (`gasUsed` with a 1,000,000 limit; [full table](docs/compare.md)):
 
 | Preimage circuit, 2 inputs | Solidity (solc 0.8.28, optimized) | Fe 26.6.0 |
 | --- | --- | --- |
@@ -147,7 +147,7 @@ CI runs `fe fmt --check`, `fe test` and `fe build`, regenerates the Fe sources f
 | The bounty pays the proven recipient, once, and a copied proof can't redirect it | `valid_claim_pays_the_recipient`, `copied_proof_cannot_redirect_payout`, `bounty_pays_once` |
 | The bounty can't be created for a hash no proof can match | `hash_outside_field_is_refused` |
 | A malformed key is reported, not mistaken for a bad proof | `malformed_key_is_reported` |
-| The Fe and Solidity verifiers agree on 28 cases | `scripts/compare.mjs` (CI) |
+| The Fe and Solidity verifiers agree on 28 cases and reject 500 seeded mutations | `scripts/compare.mjs` (CI) |
 | The bounty works end to end with a fresh proof | `scripts/demo.sh` (CI) |
 
 ## Limitations

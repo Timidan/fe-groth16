@@ -99,6 +99,42 @@ const tweak = (p, f) => {
   return q;
 };
 
+// Seeded fuzzing: single-word mutations of a valid proof and its inputs.
+const FUZZ_RUNS = Number(process.env.FUZZ_RUNS ?? 250);
+const FUZZ_SEED = Number(process.env.FUZZ_SEED ?? 20261124);
+const MASK = (1n << 256n) - 1n;
+
+function prng(seed) {
+  let s = seed >>> 0;
+  const next = () => {
+    // mulberry32
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0);
+  };
+  const word = () => {
+    let w = 0n;
+    for (let i = 0; i < 8; i++) w = (w << 32n) | BigInt(next());
+    return w;
+  };
+  return { int: (n) => next() % n, word };
+}
+
+const MUTATIONS = [
+  ["random word", (v, r) => r.word()],
+  ["random field element", (v, r) => r.word() % Q],
+  ["one bit flipped", (v, r) => v ^ (1n << BigInt(r.int(256)))],
+  ["+ q", (v) => (v + Q) & MASK],
+  ["+ r", (v) => (v + R) & MASK],
+  ["- 1", (v) => (v - 1n) & MASK],
+  ["zero", () => 0n],
+];
+
+// The words of a call in calldata order: a (2), b (4), c (2), inputs (N).
+const words = (p, inputs) => [...p.a, ...p.b.flat(), ...p.c, ...inputs];
+
 function cases(main, other, foreign) {
   const { proof: p, inputs } = main;
   const bumped = [...inputs];
@@ -129,6 +165,7 @@ async function main() {
     await waitForAnvil();
     const [from] = await rpc("eth_accounts");
     const rows = [];
+    const fuzzed = [];
     let failures = 0;
 
     const circuits = [
@@ -160,6 +197,30 @@ async function main() {
         if (!ok) failures++;
         rows.push({ circuit: c.name, label, expected, ok, sol: result.sol, fe: result.fe });
       }
+
+      // Every mutation must be rejected by both verifiers.
+      const rand = prng(FUZZ_SEED + main.inputs.length);
+      const base = words(main.proof, main.inputs);
+      let tried = 0;
+      while (tried < FUZZ_RUNS) {
+        const at = rand.int(base.length);
+        const [kind, mutate] = MUTATIONS[rand.int(MUTATIONS.length)];
+        const mutated = [...base];
+        mutated[at] = mutate(base[at], rand);
+        if (mutated[at] === base[at]) continue;
+        tried++;
+        const data = selector + mutated.map(word).join("");
+        const accepted = {};
+        for (const [key, target] of [["sol", sol], ["fe", fe]]) {
+          const ret = await rpc("eth_call", [{ from, to: target.address, data, gas: `0x${GAS.toString(16)}` }, "latest"]);
+          accepted[key] = BigInt(ret) === 1n;
+        }
+        if (accepted.sol !== accepted.fe || accepted.fe) {
+          failures++;
+          console.error(`fuzz ${c.name}: word ${at} (${kind}) -> sol ${accepted.sol}, fe ${accepted.fe}`);
+        }
+      }
+      fuzzed.push(`${c.name}: ${tried}`);
     }
 
     const fmt = (r) => `${r.accepted ? "accept" : "reject"}, ${r.gas.toLocaleString("en-US")}`;
@@ -175,6 +236,10 @@ async function main() {
       if (r.expected === undefined) lines.push(`| ${r.circuit} | ${r.label} | ${r.sol.toLocaleString("en-US")} | ${r.fe.toLocaleString("en-US")} | |`);
       else lines.push(`| ${r.circuit} | ${r.label} | ${fmt(r.sol)} | ${fmt(r.fe)} | ${r.ok ? "yes" : "**NO**"} |`);
     }
+    lines.push(
+      "",
+      `Fuzzing: ${fuzzed.join(", ")} single-word mutations of the valid proof and its inputs (seed ${FUZZ_SEED}; mutations: ${MUTATIONS.map(([k]) => k).join(", ")}), each sent to both verifiers with \`eth_call\`. ${failures ? "**Failures above.**" : "Both rejected every one."}`,
+    );
     mkdirSync("docs", { recursive: true });
     writeFileSync("docs/compare.md", lines.join("\n") + "\n");
     console.log(lines.slice(4).join("\n"));
