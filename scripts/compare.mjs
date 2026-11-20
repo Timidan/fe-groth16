@@ -2,7 +2,8 @@
 // Differential test and gas comparison: the Fe verifiers against the Solidity
 // verifiers snarkjs exports for the same keys.
 //
-// For every case, both contracts must return the same result. Gas is the
+// Every case states what each contract must return: the same result, except
+// for one non-canonical encoding of A.y that only Solidity accepts. Gas is the
 // receipt's gasUsed for a transaction with a 1,000,000 gas limit, so a failed
 // precompile call shows what it burns.
 //
@@ -10,11 +11,13 @@
 // Writes docs/compare.md.
 import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { groth16 } from "snarkjs";
 import solc from "solc";
 
 const Q = 21888242871839275222246405745257275088696311157297823662689037894645226208583n;
 const R = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
-const PORT = 8547;
+const PORT = Number(process.env.PORT ?? 8547);
 const RPC = `http://127.0.0.1:${PORT}`;
 const GAS = 1_000_000n;
 
@@ -141,21 +144,30 @@ function cases(main, other, foreign) {
   bumped[bumped.length - 1] += 1n;
   const plusR = [...inputs];
   plusR[0] += R;
+  // snarkjs negates A.y as (q - y) mod q in 256-bit arithmetic, so y + (2^256 mod q)
+  // (+ k * q) negates to the same point. Fe requires A.y < q and rejects it.
+  const alias = (y) => {
+    let v = y + (MASK + 1n) % Q;
+    while (v <= Q) v += Q;
+    return v;
+  };
+  const both = (b) => [b, b];
   return [
-    ["valid proof", true, p, inputs],
-    ["second valid proof, same statement", true, other.proof, other.inputs],
-    ["last public input + 1", false, p, bumped],
-    ["first public input + r", false, p, plusR],
-    ["proof from another circuit", false, foreign.proof, inputs],
-    ["A replaced by C", false, tweak(p, (q) => (q.a = [...q.c])), inputs],
-    ["A negated", false, tweak(p, (q) => (q.a[1] = Q - q.a[1])), inputs],
-    ["B and C from another proof", false, tweak(p, (q) => ((q.b = other.proof.b), (q.c = other.proof.c))), inputs],
-    ["A.y + q", false, tweak(p, (q) => (q.a[1] += Q)), inputs],
-    ["A off the curve", false, tweak(p, (q) => (q.a = [1n, 1n])), inputs],
-    ["C off the curve", false, tweak(p, (q) => (q.c[1] += 1n)), inputs],
-    ["B.x imaginary + q", false, tweak(p, (q) => (q.b[0][0] += Q)), inputs],
-    ["B off the twist", false, tweak(p, (q) => (q.b[1][1] += 1n)), inputs],
-    ["all-zero proof", false, { a: [0n, 0n], b: [[0n, 0n], [0n, 0n]], c: [0n, 0n] }, inputs],
+    ["valid proof", both(true), p, inputs],
+    ["second valid proof, same statement", both(true), other.proof, other.inputs],
+    ["last public input + 1", both(false), p, bumped],
+    ["first public input + r", both(false), p, plusR],
+    ["proof from another circuit", both(false), foreign.proof, inputs],
+    ["A replaced by C", both(false), tweak(p, (q) => (q.a = [...q.c])), inputs],
+    ["A negated", both(false), tweak(p, (q) => (q.a[1] = Q - q.a[1])), inputs],
+    ["B and C from another proof", both(false), tweak(p, (q) => ((q.b = other.proof.b), (q.c = other.proof.c))), inputs],
+    ["A.y + q", both(false), tweak(p, (q) => (q.a[1] += Q)), inputs],
+    ["A off the curve", both(false), tweak(p, (q) => (q.a = [1n, 1n])), inputs],
+    ["C off the curve", both(false), tweak(p, (q) => (q.c[1] += 1n)), inputs],
+    ["B.x imaginary + q", both(false), tweak(p, (q) => (q.b[0][0] += Q)), inputs],
+    ["B off the twist", both(false), tweak(p, (q) => (q.b[1][1] += 1n)), inputs],
+    ["all-zero proof", both(false), { a: [0n, 0n], b: [[0n, 0n], [0n, 0n]], c: [0n, 0n] }, inputs],
+    ["A.y written as y + (2^256 mod q), same point after snarkjs's negation", [true, false], tweak(p, (q) => (q.a[1] = alias(q.a[1]))), inputs],
   ];
 }
 
@@ -166,11 +178,30 @@ async function main() {
     const [from] = await rpc("eth_accounts");
     const rows = [];
     const fuzzed = [];
+    const fresh = [];
     let failures = 0;
 
+    // Fresh valid proofs, made here with snarkjs: both verifiers must accept every one.
+    const rand = prng(FUZZ_SEED);
+    const scalar = () => rand.word() % R;
     const circuits = [
-      { name: "preimage", contract: "PreimageVerifier", main: "proof_bob", other: "proof_bob_2", foreign: "multiplier/proof_1" },
-      { name: "multiplier", contract: "MultiplierVerifier", main: "proof_1", other: "proof_2", foreign: "preimage/proof_bob" },
+      {
+        name: "preimage", contract: "PreimageVerifier", main: "proof_bob", other: "proof_bob_2", foreign: "multiplier/proof_1",
+        fresh: [
+          { secret: "0", recipient: "0" },
+          ...Array.from({ length: 3 }, () => ({ secret: scalar().toString(), recipient: (rand.word() >> 96n).toString() })),
+        ],
+      },
+      {
+        name: "multiplier", contract: "MultiplierVerifier", main: "proof_1", other: "proof_2", foreign: "preimage/proof_bob",
+        fresh: [
+          { a: "0", b: "7" },
+          { a: "1", b: "1" },
+          { a: (R - 1n).toString(), b: "1" },
+          { a: (R - 1n).toString(), b: (R - 1n).toString() },
+          ...Array.from({ length: 8 }, () => ({ a: scalar().toString(), b: scalar().toString() })),
+        ],
+      },
     ];
     for (const c of circuits) {
       mkdirSync(`build/${c.name}`, { recursive: true });
@@ -193,7 +224,7 @@ async function main() {
           const receipt = await send(from, { to: target.address, data });
           result[key] = { accepted: BigInt(ret) === 1n, gas: Number(BigInt(receipt.gasUsed)) };
         }
-        const ok = result.sol.accepted === result.fe.accepted && result.fe.accepted === expected;
+        const ok = result.sol.accepted === expected[0] && result.fe.accepted === expected[1];
         if (!ok) failures++;
         rows.push({ circuit: c.name, label, expected, ok, sol: result.sol, fe: result.fe });
       }
@@ -221,6 +252,23 @@ async function main() {
         }
       }
       fuzzed.push(`${c.name}: ${tried}`);
+
+      const wasm = `build/${c.name}/${c.name}_js/${c.name}.wasm`;
+      if (!existsSync(wasm)) run("node_modules/.bin/circom2", [`circuits/${c.name}.circom`, "--wasm", "-o", `build/${c.name}`]);
+      for (const input of c.fresh) {
+        const { proof, publicSignals } = await groth16.fullProve(input, wasm, `vectors/${c.name}/${c.name}.zkey`);
+        const data = encode(selector, calldata(proof), publicSignals.map(BigInt));
+        const accepted = {};
+        for (const [key, target] of [["sol", sol], ["fe", fe]]) {
+          const ret = await rpc("eth_call", [{ from, to: target.address, data, gas: `0x${GAS.toString(16)}` }, "latest"]);
+          accepted[key] = BigInt(ret) === 1n;
+        }
+        if (!accepted.sol || !accepted.fe) {
+          failures++;
+          console.error(`fresh ${c.name} ${JSON.stringify(input)}: sol ${accepted.sol}, fe ${accepted.fe}`);
+        }
+      }
+      fresh.push(`${c.name}: ${c.fresh.length}`);
     }
 
     const fmt = (r) => `${r.accepted ? "accept" : "reject"}, ${r.gas.toLocaleString("en-US")}`;
@@ -229,14 +277,19 @@ async function main() {
       "",
       "Generated by `scripts/compare.mjs`. Each case is sent to both contracts as a transaction with a 1,000,000 gas limit; gas is the receipt's `gasUsed`, including the 21,000 base cost and calldata. Solidity: snarkjs 0.7.6 template, solc 0.8.28, optimizer on (200 runs). Fe: 26.6.0, `fe build`.",
       "",
-      "| Circuit | Case | Solidity | Fe | Same result |",
+      "| Circuit | Case | Solidity | Fe | Expected |",
       "| --- | --- | --- | --- | --- |",
     ];
     for (const r of rows) {
       if (r.expected === undefined) lines.push(`| ${r.circuit} | ${r.label} | ${r.sol.toLocaleString("en-US")} | ${r.fe.toLocaleString("en-US")} | |`);
-      else lines.push(`| ${r.circuit} | ${r.label} | ${fmt(r.sol)} | ${fmt(r.fe)} | ${r.ok ? "yes" : "**NO**"} |`);
+      else {
+        const want = r.expected[0] === r.expected[1] ? `both ${r.expected[0] ? "accept" : "reject"}` : "Solidity accepts, Fe rejects";
+        lines.push(`| ${r.circuit} | ${r.label} | ${fmt(r.sol)} | ${fmt(r.fe)} | ${want}${r.ok ? "" : " — **NOT MET**"} |`);
+      }
     }
     lines.push(
+      "",
+      `Fresh proofs: ${fresh.join(", ")} valid proofs generated by snarkjs for random and edge-case inputs (public values 0, 1 and r - 1 among them), each sent to both verifiers with \`eth_call\`. ${failures ? "**Failures above.**" : "Both accepted every one."}`,
       "",
       `Fuzzing: ${fuzzed.join(", ")} single-word mutations of the valid proof and its inputs (seed ${FUZZ_SEED}; mutations: ${MUTATIONS.map(([k]) => k).join(", ")}), each sent to both verifiers with \`eth_call\`. ${failures ? "**Failures above.**" : "Both rejected every one."}`,
     );
@@ -253,3 +306,5 @@ async function main() {
 }
 
 await main();
+// snarkjs keeps curve worker threads alive; exit explicitly.
+process.exit(process.exitCode ?? 0);

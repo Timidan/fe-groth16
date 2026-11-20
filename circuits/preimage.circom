@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0
+// This circuit includes circomlib's Poseidon (GPL-3.0), so it is distributed under GPL-3.0.
+// The rest of the repository is Apache-2.0.
 pragma circom 2.0.0;
 
 include "../node_modules/circomlib/circuits/poseidon.circom";
