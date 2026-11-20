@@ -48,11 +48,13 @@ pub contract PreimageBounty uses (ctx: Ctx, call: mut Call, log: mut Log) {
                 "Invalid proof",
             )
 
-            // Mark the bounty claimed before sending, so a reentrant call finds it claimed.
+            // Mark the bounty claimed before sending, so a reentrant call finds it
+            // claimed. Forward the remaining gas: with only the 2,300 stipend, a
+            // contract wallet that records the payment could never be paid.
             claimed = true
             let amount = ctx.selfbalance()
             assert!(
-                call.send_value(addr: recipient, gas: 0, value: amount).success(),
+                call.send_value(addr: recipient, gas: ctx.gas(), value: amount).success(),
                 "Transfer failed",
             )
             log.emit(BountyClaimed { recipient, amount })

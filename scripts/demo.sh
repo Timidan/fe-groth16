@@ -2,7 +2,8 @@
 # End-to-end demo on a local anvil chain:
 #   a sponsor funds a PreimageBounty, Alice proves she knows the secret without
 #   revealing it, Mallory copies her proof and fails to redirect the payout,
-#   a relayer submits Alice's claim, and a second claim is refused.
+#   a relayer submits Alice's claim, which pays her contract wallet, and a
+#   second claim is refused.
 #
 # Needs: fe, anvil and cast (Foundry), jq, Node 18+, `npm ci`.
 set -euo pipefail
@@ -19,22 +20,30 @@ for _ in $(seq 50); do cast chain-id >/dev/null 2>&1 && break; sleep 0.1; done
 step() { printf '\n== %s\n' "$*"; }
 eth() { cast from-wei "$(cast balance "$1")"; }
 
-mapfile -t ACCOUNTS < <(cast rpc eth_accounts | jq -r '.[]')
-SPONSOR=${ACCOUNTS[0]} ALICE=${ACCOUNTS[1]} MALLORY=${ACCOUNTS[2]} RELAYER=${ACCOUNTS[3]}
+# Portable to macOS's bash 3.2 and BSD date: no mapfile, no date +%N.
+account() { cast rpc eth_accounts | jq -r ".[$1]"; }
+now_ms() { node -e 'console.log(Date.now())'; }
+SPONSOR=$(account 0) ALICE=$(account 1) MALLORY=$(account 2) RELAYER=$(account 3)
 
 step "Build the Fe contracts"
 fe build >/dev/null
 echo "out/PreimageBounty.bin: $(($(wc -c < out/PreimageBounty.runtime.bin) / 2)) bytes of runtime code"
 
-step "Alice picks a secret and proves she knows it, for her own address"
+step "Alice deploys a wallet contract that records every payment in storage"
+# Runtime: CALLVALUE PUSH0 SSTORE STOP. Storing costs more than the 2,300 gas
+# a bare value transfer carries, so the bounty must forward gas to pay it.
+WALLET=$(cast send --unlocked --from "$ALICE" --create 0x600480600b6000396000f3345f5500 --json | jq -r .contractAddress)
+echo "wallet at $WALLET"
+
+step "Alice picks a secret and proves she knows it, for her wallet"
 SECRET=$(node -e 'console.log(BigInt("0x" + require("crypto").randomBytes(31).toString("hex")).toString())')
-echo "{\"secret\":\"$SECRET\",\"recipient\":\"$(cast to-dec "$ALICE")\"}" > "$WORK/input.json"
-START=$(date +%s%N)
+echo "{\"secret\":\"$SECRET\",\"recipient\":\"$(cast to-dec "$WALLET")\"}" > "$WORK/input.json"
+START=$(now_ms)
 scripts/prove.sh preimage "$WORK/input.json" "$WORK/alice" >/dev/null
-echo "proof generated and checked by snarkjs in $(( ($(date +%s%N) - START) / 1000000 )) ms"
+echo "proof generated and checked by snarkjs in $(( $(now_ms) - START )) ms"
 HASH=$(jq -r '.[0]' "$WORK/alice/public.json")
 echo "Poseidon(secret) = $HASH"
-echo "public inputs: hash, recipient = $(jq -r '.[1]' "$WORK/alice/public.json") ($ALICE)"
+echo "public inputs: hash, recipient = $(jq -r '.[1]' "$WORK/alice/public.json") ($WALLET)"
 
 step "The sponsor funds a bounty of 1 ETH for that hash"
 INIT="$(cat out/PreimageBounty.bin)$(cast abi-encode 'constructor(uint256)' "$HASH" | cut -c3-)"
@@ -58,15 +67,13 @@ echo "refused: $(grep -o 'Invalid proof' <<< "$OUT" | head -1)"
 echo "bounty balance still $(eth "$BOUNTY") ETH, claimed() = $(cast call "$BOUNTY" 'claimed()(bool)')"
 
 step "A relayer submits Alice's claim; the payout goes to the address in the proof"
-BEFORE=$(cast balance "$ALICE")
-TX=$(cast send --unlocked --from "$RELAYER" "$BOUNTY" "$SIG" "$A" "$B" "$C" "$ALICE" --json)
+TX=$(cast send --unlocked --from "$RELAYER" "$BOUNTY" "$SIG" "$A" "$B" "$C" "$WALLET" --json)
 echo "status $(jq -r .status <<< "$TX"), gas used $(cast to-dec "$(jq -r .gasUsed <<< "$TX")")"
-GAINED=$(node -e 'console.log((BigInt(process.argv[1]) - BigInt(process.argv[2])).toString())' "$(cast balance "$ALICE")" "$BEFORE")
-echo "Alice received $(cast from-wei "$GAINED") ETH; bounty balance $(eth "$BOUNTY") ETH"
+echo "Alice's wallet holds $(eth "$WALLET") ETH and recorded $(cast from-wei "$(cast to-dec "$(cast storage "$WALLET" 0)")") ETH in storage; bounty balance $(eth "$BOUNTY") ETH"
 echo "BountyClaimed event topic: $(jq -r '.logs[0].topics[0]' <<< "$TX")"
 
 step "The same proof cannot be used again"
-if OUT=$(cast send --unlocked --from "$RELAYER" "$BOUNTY" "$SIG" "$A" "$B" "$C" "$ALICE" 2>&1); then
+if OUT=$(cast send --unlocked --from "$RELAYER" "$BOUNTY" "$SIG" "$A" "$B" "$C" "$WALLET" 2>&1); then
   echo "UNEXPECTED: second claim went through"; exit 1
 fi
 echo "refused: $(grep -o 'Already claimed' <<< "$OUT" | head -1)"

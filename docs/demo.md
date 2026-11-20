@@ -5,23 +5,26 @@ Output of `scripts/demo.sh` on a local anvil chain. Addresses are anvil's defaul
 ```text
 
 == Build the Fe contracts
-out/PreimageBounty.bin: 3541 bytes of runtime code
+out/PreimageBounty.bin: 3544 bytes of runtime code
 
-== Alice picks a secret and proves she knows it, for her own address
-proof generated and checked by snarkjs in 1958 ms
-Poseidon(secret) = 9401046016500942214451758579402236512703443828088383225827932775685295994293
-public inputs: hash, recipient = 642829559307850963015472508762062935916233390536 (0x70997970c51812dc3a010c7d01b50e0d17dc79c8)
+== Alice deploys a wallet contract that records every payment in storage
+wallet at 0x8464135c8f25da09e49bc8782676a84730c318bc
+
+== Alice picks a secret and proves she knows it, for her wallet
+proof generated and checked by snarkjs in 2104 ms
+Poseidon(secret) = 18434297472762404197489885810490150442664474384069647054787214275696324057993
+public inputs: hash, recipient = 755818542898286480414060217752168590440816384188 (0x8464135c8f25da09e49bc8782676a84730c318bc)
 
 == The sponsor funds a bounty of 1 ETH for that hash
-PreimageBounty at 0x5fbdb2315678afecb367f032d93f642f64180aa3, balance 1.000000000000000000 ETH, hash() = 9401046016500942214451758579402236512703443828088383225827932775685295994293 [9.401e75]
+PreimageBounty at 0x5fbdb2315678afecb367f032d93f642f64180aa3, balance 1.000000000000000000 ETH, hash() = 18434297472762404197489885810490150442664474384069647054787214275696324057993 [1.843e76]
 
 == Mallory copies Alice's proof from the mempool and claims it for herself
 refused: Invalid proof
 bounty balance still 1.000000000000000000 ETH, claimed() = false
 
 == A relayer submits Alice's claim; the payout goes to the address in the proof
-status 0x1, gas used 257714
-Alice received 1.000000000000000000 ETH; bounty balance 0.000000000000000000 ETH
+status 0x1, gas used 279825
+Alice's wallet holds 1.000000000000000000 ETH and recorded 1.000000000000000000 ETH in storage; bounty balance 0.000000000000000000 ETH
 BountyClaimed event topic: 0xac56e31790f51d5ee1fd63f4e99bd0bb5363ff7e23dd9005bdfb0bb52da5a4a6
 
 == The same proof cannot be used again
