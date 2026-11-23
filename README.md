@@ -50,6 +50,8 @@ error[8-0000]: type mismatch
   │                                                 ^^^^^^^^^ expected `[u256; 2]`, but `[{integer}; 3]` is given
 ```
 
+Fe's `Result` is `#[must_use]`, so calling `verify` and forgetting to check the answer, the classic verifier misuse, is a compile error (`unused value of type Result<Rejection, ()>`); dropping it takes an explicit `let _ =`.
+
 `verify` has no `uses` clause, so it is handed no capability at all: the compiler rejects any storage access, event, value transfer or contract call in it. Its only external calls are the BN254 precompiles, reached through std's `crypto` wrappers, which use an intrinsic internal to std and restricted to precompile addresses. That restriction is a property of std, not something the compiler checks in user code. Fe carries the absence of effects into the ABI: the generated `verifyProof` is `pure`, where snarkjs's Solidity verifier is `view`. In `PreimageBounty`, the only handler that can move funds is the one that declares `mut call`:
 
 ```fe

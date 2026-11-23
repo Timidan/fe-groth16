@@ -2,6 +2,8 @@
 # Builds both circuits, runs a local Groth16 setup and writes the verifying keys.
 # Output goes to build/ (ignored) and vectors/<circuit>/verification_key.json (committed).
 # The setup is a single local contribution: fine for tests and demos, not for production.
+# The -e strings are extra entropy only: snarkjs mixes them with 64 random bytes, so
+# reruns give new keys and the contribution randomness is never known or stored.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 BIN=node_modules/.bin

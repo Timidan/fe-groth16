@@ -90,6 +90,12 @@ pub enum Rejection {
 ///
 /// Rejects malformed `A`, `C` and out-of-range coordinates before any
 /// precompile call, with a reason and without the gas a failed call burns.
+///
+/// A valid proof says the statement holds; it does not say who sent it or
+/// that it is new. Anyone can resubmit it, and anyone can re-randomise it into
+/// different bytes for the same inputs. Bind the beneficiary as a public input,
+/// and keep any spent-set keyed on a public input (a nullifier), never on the
+/// proof bytes.
 pub fn verify<const N: usize>(vk: VerifyingKey<N>, proof: Proof, inputs: [u256; N]) -> Result<
     Rejection,
     (),

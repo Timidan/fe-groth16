@@ -1,6 +1,10 @@
 //! A bounty for the preimage of a Poseidon hash, paid on a zero-knowledge
 //! proof. The claimant never reveals the preimage, and the proof commits to
 //! the recipient, so copying a pending claim cannot redirect the payout.
+//!
+//! `PREIMAGE_VK` comes from this repository's single-contributor demo setup.
+//! Before putting real value behind it, regenerate the key from a multi-party
+//! ceremony and convert it with `scripts/snarkjs2fe.mjs`.
 
 use ingot::{Proof, R, verify}
 use ingot::preimage_key::PREIMAGE_VK
