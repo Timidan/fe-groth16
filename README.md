@@ -1,6 +1,6 @@
 # fe-groth16
 
-**Pitch:** Verify circom/snarkjs Groth16 proofs from Fe contracts. Includes a typed BN254 verifier, a converter that turns a snarkjs verifying key into a drop-in Fe verifier contract, and a proof-gated bounty that shows how to use it safely.
+**Pitch:** fe-groth16 lets Fe contracts verify Groth16 proofs made with circom and snarkjs, and includes a key converter and an example bounty contract.
 
 ```fe
 use ingot::preimage_key::PREIMAGE_VK
@@ -174,7 +174,7 @@ CI runs `fe fmt --check`, `fe test` and `fe build`, regenerates the Fe sources f
 
 - **Pre-existing work:** the repository starts from the [Fe Builders Challenge starter](https://github.com/fe-lang/builders-challenge-starter) at `f9d9aa9`. Its example vault was removed; the manifest, license and CI workflow were adapted. Everything else was written during the contest.
 - **Third-party code:** the preimage circuit uses Poseidon from [circomlib](https://github.com/iden3/circomlib) (GPL-3.0), installed by npm and not vendored. Keys and proofs are generated with [snarkjs](https://github.com/iden3/snarkjs) (GPL-3.0) and circuits compiled with [circom2](https://github.com/iden3/circom) (the WebAssembly build of circom), both run as tools. The verifier follows the equation and input checks of snarkjs's Solidity verifier template; no code was copied from it.
-- **AI assistance:** Built with Claude Code, an AI coding assistant. It proposed this project among three options I chose from, and wrote the Fe code, tests, scripts and documentation under my direction. I reviewed the code and can explain it.
+- **AI assistance:** I built this project with Claude Code, an AI coding assistant. It proposed this project as one of three options, and I chose it. It wrote the Fe code, tests, scripts and documentation under my direction. I reviewed the code and can explain it.
 
 ## License
 
